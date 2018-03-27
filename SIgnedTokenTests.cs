@@ -23,9 +23,10 @@ namespace SignedTokenSandbox
 	// https://wiki.openssl.org/index.php/Command_Line_Elliptic_Curve_Operations#EC_Private_Key_File_Formats
 	//    openssl ecparam -out ec_key.pem -name  prime256v1 -genkey
 	//    openssl pkcs8 -topk8 -nocrypt -in ec_key.pem -out private.pem
-	//    https://stackoverflow.com/questions/43160232/how-do-i-load-an-openssl-ecdsa-key-into-c
-	//    openssl asn1parse -in ec_key.pem -dump
+	//    openssl ec -in ec_key.pem -pubout -out public.pem
+	//    openssl asn1parse -in ec_key.pem -dump (to see raw bytes)
 	// Requires the random number generator to be secure when signing tokens, see https://en.wikipedia.org/wiki/EdDSA
+	// Google and Apple both use ES256 for signed JWTs
 	// https://developer.apple.com/library/content/documentation/NetworkingInternetWeb/Conceptual/AppleMusicWebServicesReference/SetUpWebServices.html#//apple_ref/doc/uid/TP40017625-CH2-SW1
 	// https://cloud.google.com/iot/docs/how-tos/credentials/jwts
 	public class SignedTokenTests
@@ -72,8 +73,8 @@ namespace SignedTokenSandbox
 			var (privateKey, publicKey) = ReadPem("private.pem");
 
 			var jwtToken = jwtHandler.CreateJwtSecurityToken(
-				issuer: "auth.faithlife.com",
-				audience: "all-apis.faithlife.com",
+				issuer: "auth.example.com",
+				audience: "all-apis.example.com",
 				issuedAt: new DateTime(2018, 1, 1),
 				notBefore: new DateTime(2018, 1, 1),
 				expires:  new DateTime(2028, 1, 1),
@@ -82,12 +83,12 @@ namespace SignedTokenSandbox
 			);
 
 			string signedToken = jwtHandler.WriteToken(jwtToken);
-			Assert.StartsWith("eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIyOTg2Njg5IiwiaXNfYWRtaW5fY29uc3VtZXIiOiJ0cnVlIiwibmJmIjoxNTE0NzkzNjAwLCJleHAiOjE4MzAzMjY0MDAsImlhdCI6MTUxNDc5MzYwMCwiaXNzIjoiYXV0aC5mYWl0aGxpZmUuY29tIiwiYXVkIjoiYWxsLWFwaXMuZmFpdGhsaWZlLmNvbSJ9.", signedToken);
+			Assert.StartsWith("eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIyOTg2Njg5IiwiaXNfYWRtaW5fY29uc3VtZXIiOiJ0cnVlIiwibmJmIjoxNTE0NzkzNjAwLCJleHAiOjE4MzAzMjY0MDAsImlhdCI6MTUxNDc5MzYwMCwiaXNzIjoiYXV0aC5leGFtcGxlLmNvbSIsImF1ZCI6ImFsbC1hcGlzLmV4YW1wbGUuY29tIn0.", signedToken);
 
 			jwtHandler.ValidateToken(signedToken, new TokenValidationParameters
 			{
-				ValidIssuer = "auth.faithlife.com",
-				ValidAudience = "all-apis.faithlife.com",
+				ValidIssuer = "auth.example.com",
+				ValidAudience = "all-apis.example.com",
 				IssuerSigningKey = new ECDsaSecurityKey(LoadPublicKey(publicKey))
 			}, out var parsedSecurityToken);
 
@@ -98,7 +99,7 @@ namespace SignedTokenSandbox
 		}
 
 		[Theory]
-		[InlineData("eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIyOTg2Njg5IiwiaXNfYWRtaW5fY29uc3VtZXIiOiJ0cnVlIiwibmJmIjoxNTE0NzkzNjAwLCJleHAiOjE4MzAzMjY0MDAsImlhdCI6MTUxNDc5MzYwMCwiaXNzIjoiYXV0aC5mYWl0aGxpZmUuY29tIiwiYXVkIjoiYWxsLWFwaXMuZmFpdGhsaWZlLmNvbSJ9.8I3KKKOW25BsQHsal2jINLzfvgU__KoJrrE4514aveXmRoF7G0hg2OOXHqrQQboDkpodWhQWhv4fUd1wgIKNmA")]
+		[InlineData("eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIyOTg2Njg5IiwiaXNfYWRtaW5fY29uc3VtZXIiOiJ0cnVlIiwibmJmIjoxNTE0NzkzNjAwLCJleHAiOjE4MzAzMjY0MDAsImlhdCI6MTUxNDc5MzYwMCwiaXNzIjoiYXV0aC5leGFtcGxlLmNvbSIsImF1ZCI6ImFsbC1hcGlzLmV4YW1wbGUuY29tIn0.P5k9R4aocz7FinBoVa0WkYH2jn7C9_hG2846GzAfBeaFcNuN65y5EateEZ1g3tpEMzyQ03YW2wvujt0ORzlvdA")]
 		public void ParsesPreviouslySignedToken(string token)
 		{
 			var jwtHandler = new JwtSecurityTokenHandler();
@@ -106,8 +107,8 @@ namespace SignedTokenSandbox
 
 			jwtHandler.ValidateToken(token, new TokenValidationParameters
 			{
-				ValidIssuer = "auth.faithlife.com",
-				ValidAudience = "all-apis.faithlife.com",
+				ValidIssuer = "auth.example.com",
+				ValidAudience = "all-apis.example.com",
 				IssuerSigningKey = new ECDsaSecurityKey(LoadPublicKey(publicKey))
 			}, out var parsedToken);
 
@@ -129,8 +130,8 @@ namespace SignedTokenSandbox
 			{
 				jwtHandler.ValidateToken(token, new TokenValidationParameters
 				{
-					ValidAudience = "all-apis.faithlife.com",
-					ValidIssuer = "auth.faithlife.com",
+					ValidAudience = "all-apis.example.com",
+					ValidIssuer = "auth.example.com",
 					IssuerSigningKey = new ECDsaSecurityKey(LoadPublicKey(publicKey)),
 				}, out var parsedToken);
 			}
@@ -150,16 +151,16 @@ namespace SignedTokenSandbox
 
 			jwtHandler.ValidateToken(token, new TokenValidationParameters
 			{
-				ValidAudience = "all-apis.faithlife.com",
-				ValidIssuer = "auth.faithlife.com",
+				ValidateIssuer = false,
+				ValidateAudience = false,
 				IssuerSigningKey = new Microsoft.IdentityModel.Tokens.SymmetricSecurityKey(publicKey),
 			}, out var _);
 
 			Assert.Throws<SecurityTokenInvalidSignatureException>(() =>
 				jwtHandler.ValidateToken(token, new TokenValidationParameters
 				{
-					ValidAudience = "all-apis.faithlife.com",
-					ValidIssuer = "auth.faithlife.com",
+					ValidateIssuer = false,
+					ValidateAudience = false,
 					IssuerSigningKey = new ECDsaSecurityKey(LoadPublicKey(publicKey)),
 				}, out var _));
 		}
@@ -175,8 +176,8 @@ namespace SignedTokenSandbox
 			Assert.Throws<SecurityTokenInvalidSignatureException>(() =>
 				jwtHandler.ValidateToken(token, new TokenValidationParameters
 				{
-					ValidAudience = "all-apis.faithlife.com",
-					ValidIssuer = "auth.faithlife.com",
+					ValidateIssuer = false,
+					ValidateAudience = false,
 					IssuerSigningKey = new ECDsaSecurityKey(LoadPublicKey(publicKey)),
 				}, out var _));
 		}
