@@ -1,12 +1,11 @@
 using System;
-using System.Collections.Generic;
 using System.IdentityModel.Tokens.Jwt;
 using System.IO;
 using System.Linq;
+using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.IdentityModel.Tokens;
-using Newtonsoft.Json;
 using Org.BouncyCastle.Asn1.Sec;
 using Org.BouncyCastle.Crypto;
 using Org.BouncyCastle.Crypto.Generators;
@@ -14,9 +13,7 @@ using Org.BouncyCastle.Crypto.Parameters;
 using Org.BouncyCastle.Crypto.Prng;
 using Org.BouncyCastle.Math;
 using Org.BouncyCastle.OpenSsl;
-using Org.BouncyCastle.Pkcs;
 using Org.BouncyCastle.Security;
-using Org.BouncyCastle.X509;
 using Xunit;
 
 namespace SignedTokenSandbox
@@ -31,7 +28,7 @@ namespace SignedTokenSandbox
 	// Requires the random number generator to be secure when signing tokens, see https://en.wikipedia.org/wiki/EdDSA
 	// https://developer.apple.com/library/content/documentation/NetworkingInternetWeb/Conceptual/AppleMusicWebServicesReference/SetUpWebServices.html#//apple_ref/doc/uid/TP40017625-CH2-SW1
 	// https://cloud.google.com/iot/docs/how-tos/credentials/jwts
-	public class UnitTest1
+	public class SignedTokenTests
 	{
 		// https://www.scottbrady91.com/C-Sharp/JWT-Signing-using-ECDSA-in-dotnet-Core
 		// https://stackoverflow.com/questions/24251336/import-a-public-key-from-somewhere-else-to-cngkey
@@ -39,7 +36,7 @@ namespace SignedTokenSandbox
 		public void SignedTokenRoundTripGeneratedKeys()
 		{
 			var (privateKey, publicKey) = GenerateKeys();
-			var payload = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(new { testClaim = "hello" }));
+			var payload = Encoding.UTF8.GetBytes("hello");
 			var signatureBytes = Sign(payload, publicKey, privateKey);
 
 			Assert.True(Verify(payload, signatureBytes, publicKey));
@@ -50,7 +47,7 @@ namespace SignedTokenSandbox
 		{
 			var (privateKey, publicKey) = ReadPem("private.pem");
 
-			var payload = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(new { testClaim = "hello" }));
+			var payload = Encoding.UTF8.GetBytes("hello");
 			var signatureBytes = Sign(payload, publicKey, privateKey);
 
 			Assert.True(Verify(payload, signatureBytes, publicKey));
@@ -69,12 +66,122 @@ namespace SignedTokenSandbox
 
 		// https://jwt.io/
 		[Fact]
-		public void ExistingTokenParses()
+		public void TokenFormatMatches()
 		{
+			var jwtHandler = new JwtSecurityTokenHandler();
+			var (privateKey, publicKey) = ReadPem("private.pem");
 
+			var jwtToken = jwtHandler.CreateJwtSecurityToken(
+				issuer: "auth.faithlife.com",
+				audience: "all-apis.faithlife.com",
+				issuedAt: new DateTime(2018, 1, 1),
+				notBefore: new DateTime(2018, 1, 1),
+				expires:  new DateTime(2028, 1, 1),
+				subject: new ClaimsIdentity(new[] { new Claim("sub", "2986689"), new Claim("is_admin_consumer", "true") }),
+				signingCredentials: new SigningCredentials(new ECDsaSecurityKey(LoadPrivateKey(privateKey)), SecurityAlgorithms.EcdsaSha256)
+			);
+
+			string signedToken = jwtHandler.WriteToken(jwtToken);
+			Assert.StartsWith("eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIyOTg2Njg5IiwiaXNfYWRtaW5fY29uc3VtZXIiOiJ0cnVlIiwibmJmIjoxNTE0NzkzNjAwLCJleHAiOjE4MzAzMjY0MDAsImlhdCI6MTUxNDc5MzYwMCwiaXNzIjoiYXV0aC5mYWl0aGxpZmUuY29tIiwiYXVkIjoiYWxsLWFwaXMuZmFpdGhsaWZlLmNvbSJ9.", signedToken);
+
+			jwtHandler.ValidateToken(signedToken, new TokenValidationParameters
+			{
+				ValidIssuer = "auth.faithlife.com",
+				ValidAudience = "all-apis.faithlife.com",
+				IssuerSigningKey = new ECDsaSecurityKey(LoadPublicKey(publicKey))
+			}, out var parsedSecurityToken);
+
+			var parsedJwtToken = (JwtSecurityToken) parsedSecurityToken;
+
+			Assert.Equal("2986689", parsedJwtToken.Subject);
+			Assert.Equal("true", parsedJwtToken.Claims.First(x => x.Type == "is_admin_consumer").Value);
 		}
 
-		private (byte[], byte[]) GenerateKeys()
+		[Theory]
+		[InlineData("eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIyOTg2Njg5IiwiaXNfYWRtaW5fY29uc3VtZXIiOiJ0cnVlIiwibmJmIjoxNTE0NzkzNjAwLCJleHAiOjE4MzAzMjY0MDAsImlhdCI6MTUxNDc5MzYwMCwiaXNzIjoiYXV0aC5mYWl0aGxpZmUuY29tIiwiYXVkIjoiYWxsLWFwaXMuZmFpdGhsaWZlLmNvbSJ9.8I3KKKOW25BsQHsal2jINLzfvgU__KoJrrE4514aveXmRoF7G0hg2OOXHqrQQboDkpodWhQWhv4fUd1wgIKNmA")]
+		public void ParsesPreviouslySignedToken(string token)
+		{
+			var jwtHandler = new JwtSecurityTokenHandler();
+			var publicKey = ReadPem("public.pem").PublicKey;
+
+			jwtHandler.ValidateToken(token, new TokenValidationParameters
+			{
+				ValidIssuer = "auth.faithlife.com",
+				ValidAudience = "all-apis.faithlife.com",
+				IssuerSigningKey = new ECDsaSecurityKey(LoadPublicKey(publicKey))
+			}, out var parsedToken);
+
+			var jwtToken = (JwtSecurityToken) parsedToken;
+
+			Assert.Equal("2986689", jwtToken.Subject);
+		}
+
+		[Theory]
+		[InlineData("eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.e30.1xifFDkLeNVl735O28sR7HGbURRvRnnCDy8zvdLYuCWxFOTIryW2Q1gxw-FxCAQx_awERB-eF0CY87pG9rm-GQ", "SecurityTokenNoExpirationException")]
+		[InlineData("eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIyOTg2Njg5IiwiaXNfYWRtaW5fY29uc3VtZXIiOiJ0cnVlIiwibmJmIjoxNTE0NzkzNjAwLCJleHAiOjE1MTQ3OTM2MDAsImlhdCI6MTUxNDc5MzYwMCwiaXNzIjoiYXV0aC5mYWl0aGxpZmUuY29tIiwiYXVkIjoiYWxsLWFwaXMuZmFpdGhsaWZlLmNvbSJ9.H5MVAxhBrLYYYSIE7LIjREj60d-wHGWAL3HLr2yJt4sfFI3oC3VSCaubP7TsHnLr310Ix60-3cppW7ncl5hUJQ", "SecurityTokenExpiredException")]
+		[InlineData("eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiYWRtaW4iOnRydWUsImlhdCI6MTUxNjIzOTAyMn0.1HogBH-GQS4ANFf4effJXmQSkJ5nr1bExZ7nlL7VZPoeHVoeJz4QtMFAAQFrNipRBuhYzny1bOG3zPzD-mUXPA", "SecurityTokenInvalidSignatureException")]
+		public void RejectsInvalidToken(string token, string exceptionName)
+		{
+			var jwtHandler = new JwtSecurityTokenHandler();
+			var publicKey = ReadPem("public.pem").PublicKey;
+
+			try
+			{
+				jwtHandler.ValidateToken(token, new TokenValidationParameters
+				{
+					ValidAudience = "all-apis.faithlife.com",
+					ValidIssuer = "auth.faithlife.com",
+					IssuerSigningKey = new ECDsaSecurityKey(LoadPublicKey(publicKey)),
+				}, out var parsedToken);
+			}
+			catch (Exception e)
+			{
+				Assert.Equal(exceptionName, e.GetType().Name);
+			}
+		}
+
+		[Theory]
+		[InlineData("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIyOTg2Njg5IiwiaXNfYWRtaW5fY29uc3VtZXIiOiJ0cnVlIiwibmJmIjoxNTE0NzkzNjAwLCJleHAiOjE4MzAzMjY0MDAsImlhdCI6MTUxNDc5MzYwMCwiaXNzIjoiYXV0aC5mYWl0aGxpZmUuY29tIiwiYXVkIjoiYWxsLWFwaXMuZmFpdGhsaWZlLmNvbSJ9.AQujSTqoBaG-VtLWi6G5A-_iPAgfH3du4U1-XNU0m4Y")]
+		public void RejectsChangedSignatureAlgorithm(string token)
+		{
+			// https://auth0.com/blog/critical-vulnerabilities-in-json-web-token-libraries/
+			var jwtHandler = new JwtSecurityTokenHandler();
+			var publicKey = ReadPem("public.pem").PublicKey;
+
+			jwtHandler.ValidateToken(token, new TokenValidationParameters
+			{
+				ValidAudience = "all-apis.faithlife.com",
+				ValidIssuer = "auth.faithlife.com",
+				IssuerSigningKey = new Microsoft.IdentityModel.Tokens.SymmetricSecurityKey(publicKey),
+			}, out var _);
+
+			Assert.Throws<SecurityTokenInvalidSignatureException>(() =>
+				jwtHandler.ValidateToken(token, new TokenValidationParameters
+				{
+					ValidAudience = "all-apis.faithlife.com",
+					ValidIssuer = "auth.faithlife.com",
+					IssuerSigningKey = new ECDsaSecurityKey(LoadPublicKey(publicKey)),
+				}, out var _));
+		}
+
+		[Theory]
+		[InlineData("eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiIyOTg2Njg5In0.")]
+		public void RejectsNoSignature(string token)
+		{
+			// https://auth0.com/blog/critical-vulnerabilities-in-json-web-token-libraries/
+			var jwtHandler = new JwtSecurityTokenHandler();
+			var publicKey = ReadPem("public.pem").PublicKey;
+
+			Assert.Throws<SecurityTokenInvalidSignatureException>(() =>
+				jwtHandler.ValidateToken(token, new TokenValidationParameters
+				{
+					ValidAudience = "all-apis.faithlife.com",
+					ValidIssuer = "auth.faithlife.com",
+					IssuerSigningKey = new ECDsaSecurityKey(LoadPublicKey(publicKey)),
+				}, out var _));
+		}
+
+		private (byte[] PrivateKey, byte[] PublicKey) GenerateKeys()
 		{
 			var generator = new ECKeyPairGenerator();
 			var curve = SecNamedCurves.GetByName("secp256r1");
@@ -139,19 +246,6 @@ namespace SignedTokenSandbox
 			return provider.Sign(payload);
 		}
 
-		private static string CreateSignedJwt(ECDsa ecdsa)
-		{
-			var jwtHandler = new JwtSecurityTokenHandler();
-
-			var jwtToken = jwtHandler.CreateJwtSecurityToken(
-				issuer: "auth.example.com",
-				expires: DateTime.UtcNow.AddMinutes(1),
-				signingCredentials: new SigningCredentials(new ECDsaSecurityKey(ecdsa), SecurityAlgorithms.EcdsaSha256)
-			);
-
-			return jwtHandler.WriteToken(jwtToken);
-		}
-
 		private static ECDsa LoadPublicKey(byte[] key)
 		{
 			return ECDsa.Create(new ECParameters
@@ -185,42 +279,19 @@ namespace SignedTokenSandbox
 			});
 		}
 
-		private static byte[] FromHexString(string hex)
-		{
-			var hexAsBytes = new byte[hex.Length / 2];
-			for (var i = 0; i < hex.Length; i += 2)
-				hexAsBytes[i / 2] = Convert.ToByte(hex.Substring(i, 2), 16);
-
-			return hexAsBytes;
-		}
-
 		private class RandomGenerator : IRandomGenerator
 		{
-			public void AddSeedMaterial(byte[] seed)
-			{
-				throw new NotImplementedException();
-			}
-
-			public void AddSeedMaterial(long seed)
-			{
-				throw new NotImplementedException();
-			}
-
 			public void NextBytes(byte[] bytes)
 			{
 				using (var random = RandomNumberGenerator.Create())
-				{
 					random.GetBytes(bytes);
-				}
 			}
 
-			public void NextBytes(byte[] bytes, int start, int len)
-			{
-				throw new NotImplementedException();
-			}
+			public void AddSeedMaterial(byte[] seed) => throw new NotImplementedException();
+
+			public void AddSeedMaterial(long seed) => throw new NotImplementedException();
+
+			public void NextBytes(byte[] bytes, int start, int len) => throw new NotImplementedException();
 		}
-
-		private static string _publicKey = "04e33993f0210a4973a94c26667007d1b56fe886e8b3c2afdd66aa9e4937478ad20acfbdc666e3cec3510ce85d40365fc2045e5adb7e675198cf57c6638efa1bdb";
-		private static string _privateKey = "c711e5080f2b58260fe19741a7913e8301c1128ec8e80b8009406e5047e6e1ef";
 	}
 }
